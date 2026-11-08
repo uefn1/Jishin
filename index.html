@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EEW Monitor - Wolfx / P2P</title>
+<style>
+  :root {
+    --bg: #0f1218;
+    --panel: #1a1f2b;
+    --text: #e8ecf4;
+    --muted: #8a94a8;
+    --accent: #4da3ff;
+    --warn: #ff4d4d;
+    --forecast: #ff9f43;
+    --cancel: #5a6270;
+    --ok: #2ecc71;
+    --border: #2a3140;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: #12161f;
+  }
+  h1 { font-size: 1.1rem; margin: 0; letter-spacing: .05em; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  select, button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: .9rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06101f; border-color: var(--accent); font-weight: 700; }
+  #status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .85rem;
+    color: var(--muted);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cancel); }
+  .dot.connected { background: var(--ok); }
+  .dot.connecting { background: var(--forecast); animation: pulse 1s infinite; }
+  main { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  #eew-card {
+    background: var(--panel);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    transition: border-color .2s, box-shadow .2s;
+    position: relative;
+    overflow: hidden;
+  }
+  #eew-card.warning {
+    border-color: var(--warn);
+    box-shadow: 0 0 40px rgba(255,77,77,.25);
+    animation: alert-blink 1.2s infinite;
+  }
+  #eew-card.forecast { border-color: var(--forecast); }
+  #eew-card.cancel { border-color: var(--cancel); opacity: .7; }
+  #eew-card.training { border-color: #f1c40f; background: #2a2610; }
+  @keyframes alert-blink {
+    0%, 100% { box-shadow: 0 0 20px rgba(255,77,77,.15); }
+    50% { box-shadow: 0 0 60px rgba(255,77,77,.55); }
+  }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+  .eew-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 16px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+  }
+  .badge.warning { background: var(--warn); color: #fff; }
+  .badge.forecast { background: var(--forecast); color: #1a1200; }
+  .badge.cancel { background: var(--cancel); color: #fff; }
+  .badge.training { background: #f1c40f; color: #1a1200; }
+  .meta { color: var(--muted); font-size: .8rem; }
+  .intensity-block {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .intensity-label { font-size: .9rem; color: var(--muted); }
+  .intensity-value {
+    font-size: clamp(3rem, 12vw, 5rem);
+    font-weight: 900;
+    line-height: 1;
+    color: var(--forecast);
+  }
+  .warning .intensity-value { color: var(--warn); }
+  .cancel .intensity-value { color: var(--muted); }
+  .details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .detail-item {
+    background: #12161f;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .detail-item .label { font-size: .75rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  .detail-item .value { font-size: 1rem; font-weight: 700; }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 16px;
+    font-size: .95rem;
+  }
+  .notice {
+    font-size: .75rem;
+    color: var(--muted);
+    line-height: 1.6;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .notice strong { color: var(--forecast); }
+  .hidden { display: none !important; }
+  footer {
+    padding: 12px 16px 24px;
+    font-size: .7rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ EEW Monitor</h1>
+  <div class="controls">
+    <select id="sourceSelect" aria-label="データソース">
+      <option value="wolfx">Wolfx Open API（JMA EEW）</option>
+      <option value="p2p">P2P地震情報 API v2</option>
+    </select>
+    <button id="soundButton" class="primary">🔔 音を有効にする</button>
+    <button id="clearButton">クリア</button>
+    <div id="status"><span class="dot" id="statusDot"></span><span id="statusText">待機中</span></div>
+  </div>
+</header>
+
+<main>
+  <div id="eew-card">
+    <div class="empty" id="emptyMessage">データソースを選択すると接続を開始します。</div>
+    <div id="eewContent" class="hidden">
+      <div class="eew-header">
+        <div>
+          <span class="badge" id="badge">予報</span>
+          <span class="meta" id="serialText"></span>
+        </div>
+        <div class="meta" id="timeText"></div>
+      </div>
+      <div class="intensity-block">
+        <span class="intensity-label">最大震度</span>
+        <span class="intensity-value" id="intensityValue">--</span>
+      </div>
+      <div class="details">
+        <div class="detail-item">
+          <span class="label">震源</span>
+          <span class="value" id="hypocenterValue">--</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">マグニチュード</span>
+          <span class="value" id="magnitudeValue">--</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">深さ</span>
+          <span class="value" id="depthValue">--</span>
+        </div>
+        <div class="detail-item">
+          <span class="label">データソース</span>
+          <span class="value" id="sourceValue">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notice">
+    <strong>⚠ 重要な注意</strong><br>
+    本アプリは非公式の参考情報です。緊急地震速報の正式な情報は、気象庁の公式発表およびNHK等の公的チャンネルで必ず確認してください。
+    Wolfx Open APIは非公式プロジェクトであり、情報の正確性・速報性・可用性は保証されません。P2P地震情報は個人運営のサービスです。
+    また、本アプリはページを開いている間のみ受信します。バックグラウンドでは動作しません。
+  </div>
+</main>
+
+<footer>
+  Data: <a href="https://wolfx.jp/" target="_blank" rel="noopener">Wolfx Open API</a> /
+  <a href="https://www.p2pquake.net/" target="_blank" rel="noopener">P2P地震情報</a>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+
+  // ============================================================
+  //  DOM
+  // ============================================================
+  const sourceSelect = document.getElementById('sourceSelect');
+  const soundButton = document.getElementById('soundButton');
+  const clearButton = document.getElementById('clearButton');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const eewCard = document.getElementById('eew-card');
+  const emptyMessage = document.getElementById('emptyMessage');
+  const eewContent = document.getElementById('eewContent');
+  const badge = document.getElementById('badge');
+  const serialText = document.getElementById('serialText');
+  const timeText = document.getElementById('timeText');
+  const intensityValue = document.getElementById('intensityValue');
+  const hypocenterValue = document.getElementById('hypocenterValue');
+  const magnitudeValue = document.getElementById('magnitudeValue');
+  const depthValue = document.getElementById('depthValue');
+  const sourceValue = document.getElementById('sourceValue');
+
+  // ============================================================
+  //  Audio (Web Audio API)
+  // ============================================================
+  let audioCtx = null;
+  let soundEnabled = false;
+
+  soundButton.addEventListener('click', () => {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      soundEnabled = true;
+      soundButton.textContent = '🔔 音は有効です';
+      soundButton.disabled = true;
+      soundButton.classList.remove('primary');
+      // 軽くテスト音
+      beep(880, 0.08);
+    } catch (e) {
+      alert('このブラウザでは音声を利用できません。');
+    }
+  });
+
+  function beep(freq, duration = 0.12, type = 'square', gainVal = 0.05) {
+    if (!soundEnabled || !audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(gainVal, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  }
+
+  function playWarningSound() {
+    // ピピッ ピピッ という警報音
+    if (!soundEnabled) return;
+    beep(1000, 0.1);
+    setTimeout(() => beep(1000, 0.1), 180);
+    setTimeout(() => beep(1000, 0.1), 360);
+    setTimeout(() => beep(1000, 0.1), 540);
+  }
+
+  function playForecastSound() {
+    if (!soundEnabled) return;
+    beep(700, 0.1);
+    setTimeout(() => beep(700, 0.1), 200);
+  }
+
+  // ============================================================
+  //  震度変換（P2P用）
+  // ============================================================
+  function scaleToIntensity(scale) {
+    const map = {
+      0: 'なし', 10: '1', 20: '2', 30: '3', 40: '4',
+      45: '5弱', 50: '5強', 55: '6弱', 60: '6強', 70: '7'
+    };
+    return map[scale] ?? '--';
+  }
+
+  // ============================================================
+  //  正規化
+  // ============================================================
+  function normalizeWolfx(raw) {
+    return {
+      source: 'wolfx',
+      eventId: raw.EventID ?? null,
+      serial: raw.Serial ?? null,
+      hypocenter: raw.Hypocenter ?? '不明',
+      latitude: raw.Latitude ?? null,
+      longitude: raw.Longitude ?? null,
+      magnitude: raw.Magnitude ?? raw.Magunitude ?? null, // Magnitude優先
+      depth: raw.Depth ?? null,
+      maxIntensity: raw.MaxIntensity ?? '--',
+      isWarn: raw.isWarn === true,
+      isCancel: raw.isCancel === true,
+      isTraining: raw.isTraining === true,
+      isFinal: raw.isFinal === true,
+      announcedTime: raw.AnnouncedTime ?? null,
+      originTime: raw.OriginTime ?? null,
+      raw
+    };
+  }
+
+  function normalizeP2p(raw) {
+    const eq = raw.earthquake ?? {};
+    const hypo = eq.hypocenter ?? {};
+    // P2PのmaxScaleは 0,10,20,...70 の数値
+    const maxScale = eq.maxScale ?? raw.maxIntensity ?? null;
+    return {
+      source: 'p2p',
+      eventId: raw.id ?? eq.id ?? null,
+      serial: raw.no ?? eq.no ?? null,
+      hypocenter: hypo.name ?? '不明',
+      latitude: hypo.latitude ?? null,
+      longitude: hypo.longitude ?? null,
+      magnitude: hypo.magnitude ?? null,
+      depth: hypo.depth ?? null,
+      maxIntensity: maxScale != null ? scaleToIntensity(Number(maxScale)) : '--',
+      isWarn: raw.code === 556, // 556自体が警報相当（予報を含む場合あり）
+      isCancel: raw.cancelled === true || raw.isCancel === true,
+      isTraining: raw.test === true || raw.isTraining === true,
+      isFinal: raw.final === true || raw.isFinal === true,
+      announcedTime: raw.time ?? null,
+      originTime: eq.time ?? null,
+      raw
+    };
+  }
+
+  // ============================================================
+  //  描画
+  // ============================================================
+  function clearDisplay() {
+    eewCard.classList.remove('warning', 'forecast', 'cancel', 'training');
+    eewContent.classList.add('hidden');
+    emptyMessage.classList.remove('hidden');
+    emptyMessage.textContent = 'EEWを待機中…';
+  }
+
+  function renderEew(eew) {
+    emptyMessage.classList.add('hidden');
+    eewContent.classList.remove('hidden');
+
+    eewCard.classList.remove('warning', 'forecast', 'cancel', 'training');
+
+    // 訓練 > 取消 > 警報 > 予報 の優先順位
+    let cardClass = 'forecast';
+    let badgeText = '予報';
+    let badgeClass = 'forecast';
+
+    if (eew.isTraining) {
+      cardClass = 'training';
+      badgeText = '訓練';
+      badgeClass = 'training';
+    } else if (eew.isCancel) {
+      cardClass = 'cancel';
+      badgeText = '取消';
+      badgeClass = 'cancel';
+    } else if (eew.isWarn) {
+      cardClass = 'warning';
+      badgeText = '警報';
+      badgeClass = 'warning';
+    }
+
+    eewCard.classList.add(cardClass);
+    badge.textContent = badgeText;
+    badge.className = `badge ${badgeClass}`;
+
+    // 最終報
+    const finalLabel = eew.isFinal ? '・最終報' : '';
+    serialText.textContent = eew.serial != null ? `第${eew.serial}報${finalLabel}` : finalLabel;
+
+    timeText.textContent = eew.announcedTime ?? '';
+
+    intensityValue.textContent = eew.maxIntensity;
+    hypocenterValue.textContent = eew.hypocenter;
+    magnitudeValue.textContent = eew.magnitude != null ? `M${eew.magnitude}` : '--';
+    depthValue.textContent = eew.depth != null ? `約${eew.depth}km` : '--';
+    sourceValue.textContent = eew.source === 'wolfx' ? 'Wolfx' : 'P2P';
+
+    // 音
+    if (!eew.isTraining && !eew.isCancel) {
+      if (eew.isWarn) playWarningSound();
+      else playForecastSound();
+    }
+  }
+
+  // ============================================================
+  //  接続管理
+  // ============================================================
+  class EewConnectionManager {
+    constructor(onEew) {
+      this.onEew = onEew;
+      this.currentSource = null;
+      this.ws = null;
+      this.reconnectTimer = null;
+      this.shouldReconnect = false;
+      this.reconnectAttempts = 0;
+    }
+
+    switchTo(source) {
+      if (this.currentSource === source) return;
+      this.disconnect();
+      this.currentSource = source;
+      this.shouldReconnect = true;
+      this.reconnectAttempts = 0;
+      clearDisplay();
+      this.connect();
+    }
+
+    connect() {
+      if (this.currentSource === 'wolfx') this.connectWolfx();
+      else if (this.currentSource === 'p2p') this.connectP2p();
+    }
+
+    setStatus(text, state) {
+      statusText.textContent = text;
+      statusDot.className = 'dot' + (state ? ' ' + state : '');
+    }
+
+    connectWolfx() {
+      this.setStatus('Wolfx に接続中…', 'connecting');
+      const ws = new WebSocket('wss://ws-api.wolfx.jp/jma_eew');
+      this.ws = ws;
+
+      ws.onopen = () => {
+        this.reconnectAttempts = 0;
+        this.setStatus('Wolfx 接続中', 'connected');
+      };
+
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        // ハートビート
+        if (msg.type === 'heartbeat') {
+          try { ws.send('ping'); } catch {}
+          return;
+        }
+        // EEWのみ
+        if (msg.type !== 'jma_eew') return;
+        this.onEew(normalizeWolfx(msg));
+      };
+
+      this.attachHandlers(ws);
+    }
+
+    connectP2p() {
+      this.setStatus('P2P に接続中…', 'connecting');
+      const ws = new WebSocket('wss://api.p2pquake.net/v2/ws');
+      this.ws = ws;
+
+      ws.onopen = () => {
+        this.reconnectAttempts = 0;
+        this.setStatus('P2P 接続中', 'connected');
+      };
+
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg.code !== 556) return; // EEW(556)のみ
+        this.onEew(normalizeP2p(msg));
+      };
+
+      this.attachHandlers(ws);
+    }
+
+    attachHandlers(ws) {
+      ws.onerror = () => {
+        // oncloseで処理
+      };
+
+      ws.onclose = () => {
+        if (this.ws !== ws) return; // 既に新しい接続に切り替わっている
+        if (!this.shouldReconnect) return;
+        this.reconnectAttempts++;
+        const delay = Math.min(30000, 1000 * 2 ** (this.reconnectAttempts - 1));
+        this.setStatus(`切断。${Math.round(delay / 1000)}秒後に再接続…`, 'connecting');
+        this.reconnectTimer = setTimeout(() => {
+          if (this.shouldReconnect && this.currentSource) this.connect();
+        }, delay);
+      };
+    }
+
+    disconnect() {
+      this.shouldReconnect = false;
+      clearTimeout(this.reconnectTimer);
+      if (this.ws) {
+        const ws = this.ws;
+        this.ws = null; // oncloseで再接続しないように先にnull
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        try { ws.close(); } catch {}
+      }
+      this.setStatus('待機中', '');
+    }
+  }
+
+  // ============================================================
+  //  初期化
+  // ============================================================
+  const manager = new EewConnectionManager(renderEew);
+
+  sourceSelect.addEventListener('change', (e) => {
+    manager.switchTo(e.target.value);
+  });
+
+  clearButton.addEventListener('click', () => {
+    clearDisplay();
+  });
+
+  // 初期接続（Wolfx）
+  manager.switchTo('wolfx');
+
+  // ページ離脱時に切断
+  window.addEventListener('beforeunload', () => manager.disconnect());
+
+})();
+</script>
+</body>
+</html>
